@@ -41,7 +41,7 @@ int send_time = 10;
 
 int pktlen = 60;
 
-int num_genpackets = 256 * 8;
+int num_genpackets = 4096;
 
 int pkt_buffer_size = 4096;
 
@@ -75,8 +75,6 @@ static gxio_mpipe_context_t* const context = &context_body;
 struct {
 	volatile unsigned long v __attribute__ ((aligned(CHIP_L2_LINE_SIZE())));
 } total64 = { 0 };
-
-
 
 
 // Allocate memory for a buffer stack and its buffers, initialize the
@@ -371,6 +369,8 @@ int main(int argc, char** argv) {
 	out_stack =  stack_idx + 2;
 
 	size_t space;
+
+	num_genpackets = 256 * num_workers;
 
 	space = pkt_buffer_size * num_genpackets;
 
