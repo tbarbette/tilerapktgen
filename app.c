@@ -132,17 +132,6 @@ create_stack(gxio_mpipe_context_t* context, int stack_idx,
 
 
 
-
-
-
-
-/*
-typedef enum {GEN_UDP,GEN_HTTP} gentype_t;
-gentype_t gentype = GEN_HTTP;
-*/
-
-
-
 void print_help() {
 	printf("Usage : generator [OPTION] --link xgbe1,xgbe2,...\n"
 			"	--init_time Time in usec before starting counting packets sent. Default is 2.\n"
