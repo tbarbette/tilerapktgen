@@ -15,7 +15,13 @@ The destination MAC address and IP address can be randomized to be able to use l
 
 This program is given without license but is based on and include parts of codes from the Tilera MDE samples. Please keep my name (Tom Barbette) and University of Liege if you re-use the code.
 
+Typical compil command :
+
+tile-gcc --std=gnu99 -o tester udp.c app.c -lpthread -lgxio -ltmc
+
 
 Typical usage : 
 
-tile-monitor --run tester --link xgbe1,xgbe2,xgbe3,xgbe4 -w 16
+./tester --link xgbe1,xgbe2,xgbe3,xgbe4 -w 12
+
+12 threads are sufficient for 4*linerate 
