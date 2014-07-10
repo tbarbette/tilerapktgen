@@ -35,9 +35,9 @@ char* prefix = "";
 
 int ndevice = 0;
 
-int init_time = 2;
+int init_time = 2000000;
 
-int send_time = 10;
+int send_time = 10000000;
 
 int pktlen = 60;
 
@@ -447,7 +447,7 @@ int main(int argc, char** argv) {
 		sim_enable_mpipe_links(instance, -1);
 
 		//printf("All thread started. Starting launch in 5 seconds...\n");
-		sleep(init_time);
+		usleep(init_time);
 		gettimeofday(&tv,NULL);
 		time = 1000000 * tv.tv_sec + tv.tv_usec;
 
@@ -458,7 +458,7 @@ int main(int argc, char** argv) {
 			rxcount += targs[i].rxcount;
 		}
 
-		sleep(10);
+		usleep(send_time);
 		txterminate = 1;
 		__insn_mf();
 		gettimeofday(&tv,NULL);
@@ -475,13 +475,15 @@ int main(int argc, char** argv) {
 		double dtime = (double)(ftime-time);
 		double txdiff = (double)(ftxbytes-txbytes);
 		double rxdiff = (double)(frxbytes-rxbytes);
+		double txdiffcount = (double)(ftxcount-txcount);
+		double rxdiffcount = (double)(frxcount-rxcount);
 		double txrate = txdiff/dtime;
 		double rxrate = rxdiff/dtime;
 		double lossrate =  (txdiff - rxdiff)/txdiff;
 		double txspeed = 8 * (txdiff) / dtime;
 		double rxspeed = 8 * (rxdiff) / dtime;
-		double wtxspeed = 8 * (txdiff + (txcount* 24)) / dtime;
-		double wrxspeed = 8 * (rxdiff + (rxcount* 24)) / dtime;
+		double wtxspeed = 8 * (txdiff + (txdiffcount* 24)) / dtime;
+		double wrxspeed = 8 * (rxdiff + (rxdiffcount* 24)) / dtime;
 		printf("%s %d %lu %lu %lu %.4lf %.4lf %.2lf %.2lf %.2lf %.2lf %.2lf\n",title, pktlen, ftime-time,ftxcount-txcount,frxcount-rxcount,txrate,rxrate,txspeed,rxspeed,wtxspeed,wrxspeed,lossrate);
 
 
