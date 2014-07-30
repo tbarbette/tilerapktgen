@@ -133,8 +133,8 @@ create_stack(gxio_mpipe_context_t* context, int stack_idx,
 void print_help() {
 	printf("Usage : generator [OPTION] --link xgbe1,xgbe2,...\n"
 			"	--init_time Time in usec before starting counting packets sent. Default is 2.\n"
-			"   --send_time Time in usec of the benchmark. Default is 10.\n"
-			"   -t Prefix to print before each result line.\n"
+			"	--send_time Time in usec of the benchmark. Default is 10.\n"
+			"	-t Prefix to print before each result line.\n"
 			"	-b Start packet length. Default is 60.\n"
 			"	-l End packet length. Default is 1500.\n"
 			"	-w Number of threads for receive side and sending side. (Total is twice this number).\n"
