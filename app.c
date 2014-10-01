@@ -29,7 +29,7 @@
 #include "generator.h"
 #include "udp.h"
 
-int max_pktlen = 1501;
+int max_pktlen = 1500;
 
 char* prefix = "";
 
@@ -45,11 +45,19 @@ int num_genpackets = 4096;
 
 int pkt_buffer_size = 4096;
 
-int randomdst = 1;
+int flow_min = 1;
+
+int flow_max = 1;
+
+int dsttype = 1;
+
+uint8_t* dsts = NULL;
 
 int pause_time = 0;
 
 int verbose = 0;
+
+volatile int sendtime = 0;
 
 unsigned int num_workers = 1;
 
@@ -137,10 +145,27 @@ void print_help() {
 			"	-t Prefix to print before each result line.\n"
 			"	-b Start packet length. Default is 60.\n"
 			"	-l End packet length. Default is 1500.\n"
+			"	-i 0/1/2/+ Increment mode.O will increment by 1. 1 will multiply packet len by 2. 2 will add 2,4,8,... to the packet len. More will be an increment step"
 			"	-w Number of threads for receive side and sending side. (Total is twice this number).\n"
 			"	-r Pause time in usec after each packet sent. Default is 0.\n"
-			"	-s 0/1 Use random destinsation. Default is 1 (true).\n"
+			"	-s 0/1/2 Destination mode. 0 is fixed qdaddress, 1 is linear increasing, 2 is router testing mode. Default is 1.\n"
+			"	-d Destination MAC address, one per interface. Default is broadcast.\n"
+			"	-f Maximum flow size. Packets will be sent in burst of similar packets  Default is 1.\n"
 			"	-h Print this help message.\n");
+}
+
+int hexdec(char c) {
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	else if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	else if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	else {
+		printf("Char %c is not hexadecimal.",c);
+		return 0;
+	}
+
 }
 
 
@@ -149,8 +174,11 @@ int main(int argc, char** argv) {
 
 	char* title = "DEFAULT";
 	int receive_pause = 0;
-
+	int multiply = 0;
+	int pkt_base_len = 64;
+	int pkt_inc = 2;
 	char* links = NULL;
+
 
 	// Parse args.
 	for (int i = 1; i < argc; i++)
@@ -168,6 +196,32 @@ int main(int argc, char** argv) {
 				link++;
 			}
 			ndevice = count;
+
+		} else if (!strcmp(arg, "--dst") && i + 1 < argc)
+		{
+			char * dst = argv[++i];
+
+			if (ndevice == 0)
+				tmc_task_die("Please specify links before MAC destination.");
+			dsts = (uint8_t*)malloc(sizeof(uint8_t)*ndevice*6);
+
+			int count = 1;
+			int bitcount = 0;
+			while (*dst != '\0') {
+				if (*dst == ',') {
+					bitcount++;
+					count++;
+				} else if (*dst == ':') {
+					bitcount++;
+				} else {
+					dsts[bitcount] = dsts[bitcount]*16 + hexdec(*dst);
+				}
+				dst++;
+			}
+
+			if (ndevice != count) {
+				tmc_task_die("You've got to specify one MAC destination per interface.");
+			}
 
 		}
 		else if (!strcmp(arg, "--init_time") && i + 1 < argc)
@@ -198,9 +252,17 @@ int main(int argc, char** argv) {
 		{
 			pause_time = atoi(argv[++i]);
 		}
+		else if (!strcmp(arg, "-i") && i + 1 < argc)
+		{
+			multiply = atoi(argv[++i]);
+		}
 		else if (!strcmp(arg, "-s") && i + 1 < argc)
 		{
-			randomdst = atoi(argv[++i]);
+			dsttype = atoi(argv[++i]);
+		}
+		else if (!strcmp(arg, "-f") && i + 1 < argc)
+		{
+			flow_max = atoi(argv[++i]);
 		}
 		else if (!strcmp(arg, "-h"))
 		{
@@ -213,6 +275,8 @@ int main(int argc, char** argv) {
 			tmc_task_die("Unknown option '%s'.", arg);
 		}
 	}
+
+	pkt_base_len = pktlen;
 
 	if (ndevice <= 0) {
 		tmc_task_die("You have to provide some links");
@@ -370,13 +434,13 @@ int main(int argc, char** argv) {
 
 	size_t space;
 
-	num_genpackets = 256 * num_workers;
+	num_genpackets = 2048 * num_workers;
 
 	space = pkt_buffer_size * num_genpackets;
 
 	tmc_alloc_t alloc = TMC_ALLOC_INIT;
 	tmc_alloc_set_pagesize(&alloc, (space + 15) / 16);
-	void* mem = tmc_alloc_map(&alloc, space);
+	unsigned char* mem = tmc_alloc_map(&alloc, space);
 	if (mem == NULL)
 		tmc_task_die("Failed to allocate memory for %zd packet bytes.", space);
 
@@ -406,7 +470,7 @@ int main(int argc, char** argv) {
 	sim_enable_mpipe_links(instance, -1);
 	sleep(2);
 
-	while (pktlen < max_pktlen) {
+	while (pktlen <= max_pktlen) {
 		usleep(5000);
 		txterminate = 0;
 		rxterminate = 0;
@@ -436,7 +500,7 @@ int main(int argc, char** argv) {
 			targs[i].txbytes = 0;
 			targs[i].rxbytes = 0;
 			targs[i].rank = i;
-			targs[i].pkt = mem + (pkt_buffer_size * (i * pkt_count));
+			targs[i].pkt = (void*) (mem + (pkt_buffer_size * (i * pkt_count)));
 			targs[i].device = i / threads_per_device;
 			if (pthread_create(&(targs[i].rxthread), NULL, rx_body, &targs[i]) != 0)
 				tmc_task_die("Failure in 'pthread_create()'.");
@@ -448,6 +512,7 @@ int main(int argc, char** argv) {
 
 		//printf("All thread started. Starting launch in 5 seconds...\n");
 		usleep(init_time);
+		sendtime=1;
 		gettimeofday(&tv,NULL);
 		time = 1000000 * tv.tv_sec + tv.tv_usec;
 
@@ -459,6 +524,7 @@ int main(int argc, char** argv) {
 		}
 
 		usleep(send_time);
+		sendtime=0;
 		txterminate = 1;
 		__insn_mf();
 		gettimeofday(&tv,NULL);
@@ -471,6 +537,7 @@ int main(int argc, char** argv) {
 			ftxcount += targs[i].txcount;
 			frxcount += targs[i].rxcount;
 		}
+
 
 		double dtime = (double)(ftime-time);
 		double txdiff = (double)(ftxbytes-txbytes);
@@ -498,8 +565,23 @@ int main(int argc, char** argv) {
 				tmc_task_die("Failure in 'pthread_join()'.");
 		}
 
-		pktlen ++;
+		if (multiply == 2) {
+			pktlen = pkt_base_len + pkt_inc;
+			pkt_inc *= 2;
+		} else if (multiply == 1) {
+			if (pktlen >= max_pktlen)
+				break;
+			pktlen *= 2;
+			if (pktlen > max_pktlen)
+				pktlen = max_pktlen;
+		} else if (multiply == 0)
+			pktlen ++;
+		else
+			pktlen += multiply;
 	}
+
+	if (dsts)
+		free(dsts);
 
 	//error:
 	gxio_mpipe_destroy(context);

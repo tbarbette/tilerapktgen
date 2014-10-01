@@ -42,8 +42,23 @@ int pkt_buffer_size;
 
 int out_stack;
 
+int ndevice;
+
+#define DST_FIXE 0
+#define DST_RAND 1
+#define DST_ROUTER 2
+
 //Randomize header destination
-int randomdst;
+int dsttype;
+
+//Destination MAC address
+uint8_t* dsts;
+
+//Minimum flow size
+int flow_min;
+
+//Maximum flow size
+int flow_max;
 
 //Time to wait after a packet has been sent
 int pause_time;
@@ -54,6 +69,8 @@ gxio_mpipe_equeue_t* equeues;
 // The number of workers to use.
 unsigned int num_workers;
 
+//=1 if we are in send time (used for packet verification)
+volatile int sendtime;
 
 // Align "p" mod "align", assuming "p" is a "void*".
 #define ALIGN(p, align) do { (p) += -(long)(p) & ((align) - 1); } while(0)
