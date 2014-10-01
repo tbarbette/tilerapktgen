@@ -24,8 +24,8 @@ struct pkt {
 
 
 void* rx_body(void* arg);
-void initialize_packet(struct ether_addr src, struct ether_addr dst, struct pkt* pkt, int adddr);
+void initialize_packet(struct ether_addr src, struct ether_addr dst, struct pkt* pkt, uint32_t src_addr, uint32_t dst_addr);
 void* tx_body(void* arg);
-void udp_genpackets(void* mem);
+void udp_genpackets(unsigned char* mem);
 
 #endif
