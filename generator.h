@@ -86,7 +86,7 @@ volatile int sendtime;
 
 
 struct threadinfo {
-	long int txcount,rxcount,txbytes,rxbytes;
+	long int txcount,rxcount,txbytes,rxbytes,rxicmp;
 	pthread_t rxthread,txthread;
 	void* pkt;
 	int rank;

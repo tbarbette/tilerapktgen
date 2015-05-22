@@ -43,17 +43,24 @@ void* rx_body(void* arg)
 		for (int i = 0; i < n; i++)
 		{
 			gxio_mpipe_idesc_t* idesc = &idescs[i];
-			uint32_t* buf;
-			unsigned int len;
+
 			if (idesc->be || idesc->me || idesc->tr || idesc->ce)
 				printf("Packet error %d %d %d %d!\n",idesc->be , idesc->me , idesc->tr , idesc->ce);
 
 			if (sendtime && gxio_mpipe_idesc_get_l2_length(idesc) != pktlen) {
-				printf("Packet size is %d instead of %d !",gxio_mpipe_idesc_get_l2_length(idesc), pktlen);
+				struct ip* ip = (struct ip*)gxio_mpipe_idesc_get_l3_start(idesc);
+				if (ip->ip_p == 1) {
+					t->rxicmp++;
+				} else {
+					printf("%d : Packet size is %d instead of %d !\n",ip->ip_p,gxio_mpipe_idesc_get_l2_length(idesc), pktlen);
+				}
 			}
 			// Consume the packets.
 
-			/*buf = (uint32_t*)((uint8_t*)gxio_mpipe_idesc_get_l4_start(idesc) + 8); //End of UDP
+			/*
+			 * 			uint32_t* buf;
+			unsigned int len;
+			buf = (uint32_t*)((uint8_t*)gxio_mpipe_idesc_get_l4_start(idesc) + 8); //End of UDP
 			len = gxio_mpipe_idesc_get_l4_length(idesc) -8;
 
 
@@ -200,6 +207,11 @@ tx_body(void* arg)
 		if (n == 0) {
 			n = 128;
 			slot = gxio_mpipe_equeue_reserve_fast(&equeues[device], n);
+
+
+			if (pause_time) {
+				usleep(pause_time);
+			}
 		}
 
 
@@ -212,8 +224,6 @@ tx_body(void* arg)
 		t->txcount += 1;
 		t->txbytes += pktlen;
 
-		if (pause_time)
-			usleep(pause_time);
 	}
 
 	return (void*)NULL;
@@ -229,27 +239,30 @@ void udp_genpackets(unsigned char* mem) {
 	uint32_t dst_a = ((0x0a) << 24);
 	unsigned int router_b = 0;
 
-	uint32_t src_addr;
-	uint32_t dst_addr;
+	uint32_t src_addr = 0;
+	uint32_t dst_addr = 0;
 
 
 	int last_interface = -1;
 
 	int packet_per_if = num_genpackets / ndevice;
-	int entry_per_if = 0;
 
-	int destinations[packet_per_if];
-	int number[packet_per_if];
+	//Number of flows
+	int number_of_flows = 0;
+
+	int destinations[packet_per_if]; //Destination index for each flow
+	int number[packet_per_if]; //Number of packets for this destination for each flow
 
 	if (dsttype == DST_ROUTER) {
 		int count = 0;
-		int num[ndevice - 1];
-		for (int i =0; i<ndevice - 1;i++) num[i] = 0;
+
+		int num[ndevice - 1]; //Number of packets to destination
+		for (int i =0; i<ndevice - 1;i++) num[i] = 0; //Set it to 0
 
 		do {
-
 			int min = 65536;
-			int min_int = 0;
+			int min_int = 0; //Min_int is the interface with the less destination packets
+
 			for (int i = 0; i < ndevice - 1; i++) {
 				if (num[i] < min) {
 					min = num[i];
@@ -257,7 +270,7 @@ void udp_genpackets(unsigned char* mem) {
 				}
 			}
 
-			destinations[entry_per_if] = min_int;
+			destinations[number_of_flows] = min_int;
 
 			if (flow_max > 1) {
 				double prob;
@@ -271,49 +284,54 @@ void udp_genpackets(unsigned char* mem) {
 
 				//SHould we keep this number?
 				} while ((double)rand() / (double)RAND_MAX > prob);
-				number[entry_per_if] = gen / (RAND_MAX / flow_max) + 1;
+				number[number_of_flows] = gen / (RAND_MAX / flow_max) + 1;
+
 			} else {
-				number[entry_per_if] = 1;
+				number[number_of_flows] = 1;
 			}
 
-			num[min_int] += number[entry_per_if];
-			count += number[entry_per_if];
+			num[min_int] += number[number_of_flows];
+			count += number[number_of_flows];
 
-			entry_per_if++;
-		} while (entry_per_if < packet_per_if && count < packet_per_if);
-		number[entry_per_if - 1] -= count - packet_per_if;
-		num[destinations[entry_per_if - 1]] -= count - packet_per_if;
+			number_of_flows++;
+		} while (number_of_flows < packet_per_if && count < packet_per_if);
+
+		number[number_of_flows - 1] -= count - packet_per_if;
+
+		num[destinations[number_of_flows - 1]] -= count - packet_per_if;
 		//printf("Num : %d %d %d\n",num[0],num[1],num[2]);
-		int tocorrect[ndevice - 1];
-		for (int i =0; i< ndevice - 1;i++) {
-			tocorrect[i] = (packet_per_if / (ndevice - 1)) + 1 - num[i];
-		}
-		//printf("Corr : %d %d %d\n",tocorrect[0],tocorrect[1],tocorrect[2]);
-		for (int i =0; i < entry_per_if; i++) {
-			int d = destinations[i];
-			if (tocorrect[d] == 0) continue;
-			if (tocorrect[d] < 0 && number[i] > 1) {
-				int new = number[i] + tocorrect[d];
-				if (new < 1) new = 1;
-				int diff = number[i] - new;
-				tocorrect[d] += diff;
-				number[i] = new;
-				num[d] -= diff;
-
-			} else if (tocorrect[d] > 0) {
-				number[i] += tocorrect[d];
-				num[d] += tocorrect[d];
-				tocorrect[d] = 0;
+		if (ndevice > 1) {
+			int tocorrect[ndevice - 1];
+			for (int i =0; i< ndevice - 1;i++) {
+				tocorrect[i] = (packet_per_if / (ndevice - 1))  - num[i];
 			}
 
-		}
-		//printf("Num : %d %d %d\n",num[0],num[1],num[2]);
+			for (int i =0; i < number_of_flows; i++) {
+				int d = destinations[i];
+				if (tocorrect[d] == 0) continue;
+				if (tocorrect[d] < 0 && number[i] > 1) {
+					int new = number[i] + tocorrect[d];
+					if (new < 1) new = 1;
+					int diff = number[i] - new;
+					tocorrect[d] += diff;
+					number[i] = new;
+					num[d] -= diff;
 
+				} else if (tocorrect[d] > 0) {
+					number[i] += tocorrect[d];
+					num[d] += tocorrect[d];
+					tocorrect[d] = 0;
+				}
+			}
+		}
 	}
 
 
 	int i = 0;
 	for (int interface = 0; interface < ndevice; interface++) {
+		int num[ndevice];
+			for (int i =0; i<ndevice;i++) num[i] = 0;
+
 		int entry = 0;
 		int keepflow  = 0;
 	/*	int num[ndevice];
@@ -339,8 +357,8 @@ void udp_genpackets(unsigned char* mem) {
 
 				bcopy(&(dsts[interface * 6]), &dst,  6);
 			}
-
-			if (flow_max > 1 && keepflow) {
+			//printf("A %d\n",keepflow);
+			if (flow_max > 1 && keepflow > 0) {
 				keepflow--;
 			} else {
 				last_interface = interface;
@@ -377,13 +395,14 @@ void udp_genpackets(unsigned char* mem) {
 
 				//printf("Flow of %d packets\n",keepflow);
 			}
+			num[router_b] ++;
 		//num[router_b]++;
 		//printf("%u.%u.%u.%u ", src_addr >> 24 & 0x00ff, src_addr >> 16 & 0x00ff, src_addr >> 8 & 0x00ff,src_addr & 0x00ff);
 		//printf("-> %u.%u.%u.%u\n", dst_addr >> 24 & 0x00ff, dst_addr >> 16 & 0x00ff, dst_addr >> 8 & 0x00ff,dst_addr & 0x00ff);
 			initialize_packet(src,dst,pkt,htonl(src_addr),htonl(dst_addr));
 			i++;
 		}
-		//printf("Num : %d %d %d %d\n",num[0],num[1],num[2],num[3]);
+		//printf("Num : %d %d %d %d should be %d\n",num[0],num[1],num[2],num[3],packet_per_if);
 	}
 
 

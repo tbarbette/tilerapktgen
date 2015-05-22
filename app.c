@@ -41,9 +41,11 @@ int send_time = 10000000;
 
 int pktlen = 60;
 
+int notx = 0;
+
 int num_genpackets = 4096;
 
-int pkt_buffer_size = 4096;
+int pkt_buffer_size = 2048;
 
 int flow_min = 1;
 
@@ -151,6 +153,7 @@ void print_help() {
 			"	-s 0/1/2 Destination mode. 0 is fixed qdaddress, 1 is linear increasing, 2 is router testing mode. Default is 1.\n"
 			"	-d Destination MAC address, one per interface. Default is broadcast.\n"
 			"	-f Maximum flow size. Packets will be sent in burst of similar packets  Default is 1.\n"
+			"	-p Enable the reception of pause frame. Default is no.\n"
 			"	-h Print this help message.\n");
 }
 
@@ -268,6 +271,14 @@ int main(int argc, char** argv) {
 		{
 			print_help();
 			return 0;
+		}
+		else if (!strcmp(arg, "-p"))
+		{
+			receive_pause = 1;
+		}
+		else if (!strcmp(arg, "--no-tx") && i + 1 < argc)
+		{
+			notx=1;
 		}
 		else
 		{
@@ -434,7 +445,8 @@ int main(int argc, char** argv) {
 
 	size_t space;
 
-	num_genpackets = 2048 * num_workers;
+
+	num_genpackets = 512 * ndevice * 3  * num_workers;
 
 	space = pkt_buffer_size * num_genpackets;
 
@@ -470,6 +482,11 @@ int main(int argc, char** argv) {
 	sim_enable_mpipe_links(instance, -1);
 	sleep(2);
 
+	int rxcreated = 0;
+	struct threadinfo targs[num_workers];
+
+	sim_enable_mpipe_links(instance, -1);
+
 	while (pktlen <= max_pktlen) {
 		usleep(5000);
 		txterminate = 0;
@@ -478,16 +495,14 @@ int main(int argc, char** argv) {
 
 		udp_genpackets(mem);
 
-		tmc_sync_barrier_init(&sync_barrier, num_workers*2);
-		tmc_spin_barrier_init(&spin_barrier, num_workers*2);
-
-		struct threadinfo targs[num_workers];
+		tmc_sync_barrier_init(&sync_barrier, num_workers*(2-rxcreated));
+		tmc_spin_barrier_init(&spin_barrier, num_workers*(2-rxcreated));
 
 
 		int i;
 
 		struct timeval tv;
-		long int txcount = 0,rxcount = 0,txbytes=0,rxbytes=0;
+		long int txcount = 0,rxcount = 0,txbytes=0,rxbytes=0,rxicmp=0,frxicmp=0;
 		unsigned long time;
 
 		int pkt_count = num_genpackets / num_workers;
@@ -502,13 +517,18 @@ int main(int argc, char** argv) {
 			targs[i].rank = i;
 			targs[i].pkt = (void*) (mem + (pkt_buffer_size * (i * pkt_count)));
 			targs[i].device = i / threads_per_device;
-			if (pthread_create(&(targs[i].rxthread), NULL, rx_body, &targs[i]) != 0)
-				tmc_task_die("Failure in 'pthread_create()'.");
-			if (pthread_create(&(targs[i].txthread), NULL, tx_body, &targs[i]) != 0)
-				tmc_task_die("Failure in 'pthread_create()'.");
-		}
+			if (!rxcreated) {
+				if (pthread_create(&(targs[i].rxthread), NULL, rx_body, &targs[i]) != 0)
+					tmc_task_die("Failure in 'pthread_create()'.");
 
-		sim_enable_mpipe_links(instance, -1);
+			}
+
+			if (!notx)
+				if (pthread_create(&(targs[i].txthread), NULL, tx_body, &targs[i]) != 0)
+					tmc_task_die("Failure in 'pthread_create()'.");
+		}
+		rxcreated = 1;
+
 
 		//printf("All thread started. Starting launch in 5 seconds...\n");
 		usleep(init_time);
@@ -521,6 +541,7 @@ int main(int argc, char** argv) {
 			rxbytes += targs[i].rxbytes;
 			txcount += targs[i].txcount;
 			rxcount += targs[i].rxcount;
+			rxicmp += targs[i].rxicmp;
 		}
 
 		usleep(send_time);
@@ -536,6 +557,7 @@ int main(int argc, char** argv) {
 			frxbytes += targs[i].rxbytes;
 			ftxcount += targs[i].txcount;
 			frxcount += targs[i].rxcount;
+			frxicmp += targs[i].rxicmp;
 		}
 
 
@@ -552,20 +574,27 @@ int main(int argc, char** argv) {
 		double wtxspeed = 8 * (txdiff + (txdiffcount* 24)) / dtime;
 		double wrxspeed = 8 * (rxdiff + (rxdiffcount* 24)) / dtime;
 		printf("%s %d %lu %lu %lu %.4lf %.4lf %.2lf %.2lf %.2lf %.2lf %.2lf\n",title, pktlen, ftime-time,ftxcount-txcount,frxcount-rxcount,txrate,rxrate,txspeed,rxspeed,wtxspeed,wrxspeed,lossrate);
+		if (frxicmp-rxicmp) {
+			printf("But %lu ICMP packets\n",frxicmp-rxicmp);
+		}
 
 
 		usleep(100);
-		rxterminate = 1;
-		__insn_mf();
+
 		for (int i = 0; i < num_workers; i++)
 		{
-			if (pthread_join(targs[i].rxthread, NULL) != 0)
-				tmc_task_die("Failure in 'pthread_join()'.");
-			if (pthread_join(targs[i].txthread, NULL) != 0)
-				tmc_task_die("Failure in 'pthread_join()'.");
+			if (!notx)
+				if (pthread_join(targs[i].txthread, NULL) != 0)
+					tmc_task_die("Failure in 'pthread_join()'.");
 		}
 
-		if (multiply == 2) {
+		//Mode -1 : it's the rate which change
+		if (multiply == -1) {
+			pause_time += 1;
+			if (txspeed < 10) {
+				break;
+			}
+		} else if (multiply == 2) {
 			pktlen = pkt_base_len + pkt_inc;
 			pkt_inc *= 2;
 		} else if (multiply == 1) {
@@ -578,6 +607,15 @@ int main(int argc, char** argv) {
 			pktlen ++;
 		else
 			pktlen += multiply;
+	}
+
+	rxterminate = 1;
+	__insn_mf();
+	//Wait for RX threads
+	for (int i = 0; i < num_workers; i++)
+	{
+		if (pthread_join(targs[i].rxthread, NULL) != 0)
+			tmc_task_die("Failure in 'pthread_join()'.");
 	}
 
 	if (dsts)
