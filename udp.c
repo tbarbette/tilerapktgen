@@ -348,8 +348,6 @@ void udp_genpackets(unsigned char* mem) {
 			} else
 				bcopy(srcd,&src,  6);
 
-			bcopy(srcd,&src,  6);
-
 			if (!dsts) {
 				u_int8_t dstd[6] = {0xff,0xff,0xff,0xff,0xff,0xff}; //Dst mac
 				bcopy(dstd, &dst,  6);
