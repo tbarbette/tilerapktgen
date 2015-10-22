@@ -29,6 +29,8 @@
 #include "generator.h"
 #include "udp.h"
 
+#define BIDIRECTIONAL 1
+
 int max_pktlen = 1500;
 
 char* prefix = "";
@@ -495,9 +497,13 @@ int main(int argc, char** argv) {
 
 		udp_genpackets(mem);
 
+#if BIDIRECTIONAL
 		tmc_sync_barrier_init(&sync_barrier, num_workers*(2-rxcreated));
 		tmc_spin_barrier_init(&spin_barrier, num_workers*(2-rxcreated));
-
+#else
+		tmc_sync_barrier_init(&sync_barrier, (num_workers/2)*(2-rxcreated));
+		tmc_spin_barrier_init(&spin_barrier, (num_workers/2)*(2-rxcreated));
+#endif
 
 		int i;
 
@@ -518,14 +524,30 @@ int main(int argc, char** argv) {
 			targs[i].pkt = (void*) (mem + (pkt_buffer_size * (i * pkt_count)));
 			targs[i].device = i / threads_per_device;
 			if (!rxcreated) {
+#if BIDIRECTIONAL
 				if (pthread_create(&(targs[i].rxthread), NULL, rx_body, &targs[i]) != 0)
 					tmc_task_die("Failure in 'pthread_create()'.");
-
+#else
+				if((targs[i].device & 1) == 1){
+					if (pthread_create(&(targs[i].rxthread), NULL, rx_body, &targs[i]) != 0)
+						tmc_task_die("Failure in 'pthread_create()'.");
+				}
+#endif
 			}
 
 			if (!notx)
+#if BIDIRECTIONAL
 				if (pthread_create(&(targs[i].txthread), NULL, tx_body, &targs[i]) != 0)
 					tmc_task_die("Failure in 'pthread_create()'.");
+#else
+			{
+				if((targs[i].device & 1) == 0)
+				{
+					if (pthread_create(&(targs[i].txthread), NULL, tx_body, &targs[i]) != 0)
+						tmc_task_die("Failure in 'pthread_create()'.");
+				}
+			}
+#endif
 		}
 		rxcreated = 1;
 
@@ -583,9 +605,18 @@ int main(int argc, char** argv) {
 
 		for (int i = 0; i < num_workers; i++)
 		{
+#if BIDIRECTIONAL
 			if (!notx)
 				if (pthread_join(targs[i].txthread, NULL) != 0)
 					tmc_task_die("Failure in 'pthread_join()'.");
+#else
+			if (!notx) {
+				if((targs[i].device & 1) == 0) {
+					if (pthread_join(targs[i].txthread, NULL) != 0)
+						tmc_task_die("Failure in 'pthread_join()'.");
+				}
+			}
+#endif
 		}
 
 		//Mode -1 : it's the rate which change
@@ -614,8 +645,15 @@ int main(int argc, char** argv) {
 	//Wait for RX threads
 	for (int i = 0; i < num_workers; i++)
 	{
+#if BIDIRECTIONAL
 		if (pthread_join(targs[i].rxthread, NULL) != 0)
 			tmc_task_die("Failure in 'pthread_join()'.");
+#else
+		if((targs[i].device & 1) == 1){
+			if (pthread_join(targs[i].rxthread, NULL) != 0)
+				tmc_task_die("Failure in 'pthread_join()'.");
+		}
+#endif
 	}
 
 	if (dsts)
